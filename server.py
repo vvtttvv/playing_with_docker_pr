@@ -12,7 +12,7 @@ def generate_directory_listing(path, url_path):
     items.sort()
     html_items = []
 
-    # Ссылка на родительскую директорию
+    # Url for parent directory
     if url_path != "/":
         parent_href = urllib.parse.urljoin(url_path + "/", "..")
         html_items.append(f'<li><a href="{parent_href}">.. (parent)</a></li>')
@@ -56,7 +56,7 @@ def handle_request(conn, base_dir):
             conn.sendall(response.encode())
             return
 
-        # Декодируем URL (%20 и другие символы)
+        # This part solves a trouble with %20 in URLs
         filepath = urllib.parse.unquote(path.lstrip("/"))
         full_path = os.path.join(base_dir, filepath)
 
@@ -99,10 +99,10 @@ def handle_request(conn, base_dir):
 
 def run_server(port, base_dir):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", port))
+        s.bind(("0.0.0.0", port))
         s.listen(1)
         print(f"Serving {base_dir} on port {port}...")
-        print(f"👉 Open in browser: http://127.0.0.1:{port}/")
+        print(f"Open in browser: http://127.0.0.1:{port}/")
 
         try:
             while True:
@@ -111,13 +111,14 @@ def run_server(port, base_dir):
                     print(f"Connection from {addr}")
                     handle_request(conn, base_dir)
         except KeyboardInterrupt:
+            #This shit doesn't work :(
             print("\nServer stopped by user")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python server.py <port> <directory>")
+    if len(sys.argv) < 2:
+        print("Usage: python server.py <directory>")
         sys.exit(1)
 
-    port = int(sys.argv[1])
-    base_dir = sys.argv[2]
+    port = 8080
+    base_dir = sys.argv[1]
     run_server(port, base_dir)

@@ -7,4 +7,4 @@ COPY content ./content
 
 EXPOSE 8080
 
-CMD ["python", "server.py", "8080", "content"]
+CMD ["python", "server.py", "content"]

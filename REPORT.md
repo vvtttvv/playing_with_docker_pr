@@ -46,24 +46,38 @@ Running commands
 ![alt text](img/image.png)
 
 How it looks in docker
+
 ![alt text](img/image-1.png)
+
 ![alt text](img/image-2.png)
 
 And how it looks in browser (ugly)
+
 ![alt text](img/image-3.png)
 
 It:
 - Works with nested directories:
+  
 ![alt text](img/image-4.png)
+
 - Can go back
+  
 ![alt text](img/image-5.png)
+
 - Can open a PDF
+
 ![alt text](img/image-6.png)
+
 - Can open a PNG immage
+  
 ![alt text](img/image-7.png)
+
 - Can open a html file
+  
 ![alt text](img/image-8.png)
+
 - In case of md file it will download it (I suppose if it will be txt also)
+  
 ![alt text](img/image-9.png)
 
 I think this is base wich handels all requirements, I will enhance it if needed.
@@ -89,6 +103,7 @@ What is **something**? It is a name of the file, or image or html or... *somethi
 For example:
 
 How it looks now:
+
 ![alt text](img/image10.png)
 
 If I will run
@@ -108,6 +123,7 @@ Saved file: client_savings\SyllabusPRFAF_23x.pdf (1943426 bytes)
 ```
 
 And will look like:
+
 ![alt text](img/image11.png)
 
 Same with image:
@@ -122,6 +138,7 @@ Connection: close
 
 Saved file: client_savings\image.png (1379106 bytes)
 ```
+
 ![alt text](img/image12.png)
 
 If I will make a request to html, then it will be shown:

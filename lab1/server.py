@@ -40,15 +40,15 @@ def generate_directory_listing(path, url_path):
     </body>
     </html>
     """
-    return html.encode("utf-8")
+    return html.encode("utf-8")  # Bites for socket
 
 def handle_request(conn, base_dir):
     try:
-        request = conn.recv(1024).decode("utf-8")
+        request = conn.recv(1024).decode("utf-8")    # Get 1024 bites and convert them in string
         if not request:
             return
 
-        request_line = request.splitlines()[0]
+        request_line = request.splitlines()[0]    # To split GET /index.html HTTP/1.1 \n Host: localhost:8080 \n User-Agent: Chrome
         method, path, _ = request_line.split()
 
         if method != "GET":
@@ -98,7 +98,7 @@ def handle_request(conn, base_dir):
         conn.sendall(error_msg.encode())
 
 def run_server(port, base_dir):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:   #Note for me: IPv4, TCP (for UDP SOCK_DGRAM)
         s.bind(("0.0.0.0", port))
         s.listen(1)
         print(f"Serving {base_dir} on port {port}...")

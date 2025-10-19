@@ -3,7 +3,7 @@ import threading
 import time
 
 URL = "http://127.0.0.1:8080/index.html"
-N = 20 # number of concurrent requests to make
+N = 20
 
 def make_request(i):
     r = requests.get(URL)

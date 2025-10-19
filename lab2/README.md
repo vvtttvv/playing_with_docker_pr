@@ -6,7 +6,10 @@ Hope this report will find you in a good mood!
 
 ## Contents
 - [Running Docker Compose](#running-docker-compose)
-- [Running Client](#running-client)
+- [Running Server](#running-server)
+- [How counter looks like](#counter)
+- [Running Tester](#running-tester)
+- [Rate Limiting and problem with docker](#rate-limiting)
 - [Links](#links)
 - [Conclusion](#conclusion)
 
@@ -39,183 +42,142 @@ If you want to stop it:
 docker compose down
 ```
 
-Bellow will be some screenshots:
+---
 
-Running commands
+## Running Server
+
+I will provide this as well, because you will need it when testing race problem and rate limiting.
+
+Command:
+
+```bash
+python server.py content
+```
+
+How it looks like:
+
 ![alt text](img/image.png)
 
-How it looks in docker
-![alt text](img/image-1.png)
-![alt text](img/image-2.png)
-
-And how it looks in browser (ugly)
-![alt text](img/image-3.png)
-
-It:
-- Works with nested directories:
-![alt text](img/image-4.png)
-- Can go back
-![alt text](img/image-5.png)
-- Can open a PDF
-![alt text](img/image-6.png)
-- Can open a PNG immage
-![alt text](img/image-7.png)
-- Can open a html file
-![alt text](img/image-8.png)
-- In case of md file it will download it (I suppose if it will be txt also)
-![alt text](img/image-9.png)
-
-I think this is base wich handels all requirements, I will enhance it if needed.
+Check in more details [how counter looks like](#counter)
 
 ---
 
-## Running Client
+## Counter
 
-Next is running client since it is in requirements. 
+After some requests (alternatively run `python test_concurrent.py`) **reload** the page and you will see:
 
-If I got it right, it should work separately from docker compose, therefore I will run it in vs code.
+![alt text](img/image2.png)
 
-Also, in theory it should be ran with my friend, but all my programmer friends are drinking at xfaf or relaxing at the sea. So, we have what we have.
+In `server.py` you have these lines in code:
 
-Firstly, we should run this command:
-
-```bash
-python client.py localhost 8080 <something>   
+```python
+        # Increassing counter
+        # old_value = request_counts[full_path]
+        # time.sleep(0.001)
+        # request_counts[full_path] = old_value + 1 
+        with counts_lock:
+            request_counts[full_path] += 1
 ```
 
-What is **something**? It is a name of the file, or image or html or... *something*...
+Comment uncommented part and vise-versa. Run `python test_concurrent.py` and see that not all requests were scored, this is so called **race condition**. `Lock` helps to avoid it because is takes a thread, stops others (as I understood) and they can't acccess and change the counter until this thread will be done. 
 
-For example:
+---
 
-How it looks now:
-![alt text](img/image10.png)
+## Running Tester
 
-If I will run
+Just run
+
 ```bash
-python client.py localhost 8080 SyllabusPRFAF_23x.pdf  
-```
-It will show:
-```bash
-=== Response Headers ===
-HTTP/1.1 200 OK
-Content-Type: application/pdf
-Content-Length: 1943426
-Connection: close
-=========================
-
-Saved file: client_savings\SyllabusPRFAF_23x.pdf (1943426 bytes)
+python test_concurrent.py
 ```
 
-And will look like:
-![alt text](img/image11.png)
+By default it makes 20 requests:
 
-Same with image:
-```bash
-PS D:\Programming\Docker\Lab1> python client.py localhost 8080 image.png
-=== Response Headers ===
-HTTP/1.1 200 OK
-Content-Type: image/png
-Content-Length: 1379106
-Connection: close
-=========================
-
-Saved file: client_savings\image.png (1379106 bytes)
+```python
+URL = "http://127.0.0.1:8080/index.html"
+N = 20
 ```
-![alt text](img/image12.png)
 
-If I will make a request to html, then it will be shown:
-```bash
-PS D:\Programming\Docker\Lab1> python client.py localhost 8080 index.html
-=== Response Headers ===
-HTTP/1.1 200 OK
-Content-Type: text/html
-Content-Length: 1534
-Connection: close
-=========================
+Feel free to change it.
 
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Directory listing for /subdir/</title>
-    <style>
-        body {
-            font-family: monospace;
-            background-color: #f4f4f4;
-            color: #333;
-            padding: 20px;
-        }
-        h2 {
-            margin-top: 0;
-        }
-        ul {
-            list-style: none;
-            padding: 0;
-        }
-        li {
-            margin: 5px 0;
-        }
-        a {
-            color: #0066cc;
-            text-decoration: none;
-        }
-        a:hover {
-            text-decoration: underline;
-        }
-        .clickbait {
-            background: #ffefef;
-            border: 2px dashed #ff0000;
-            padding: 15px;
-            margin-bottom: 20px;
-            font-size: 18px;
-            text-align: center;
-            color: #cc0000;
-            font-weight: bold;
-            border-radius: 8px;
-            animation: shake 0.6s infinite alternate;
-        }
+---
 
-    </style>
-</head>
-<body>
-    <div class="clickbait">
-        GOTCHA! You fell for the oldest clickbait... or not...
-    </div>
+## Rate Limiting
 
-    <h2>Index of /subdir/</h2>
-    <ul>
-        <li></li><a href="/subdir/">nested/</a></li>
-        <li><a href="/subdir/Syllabus PR FAF-23x .pdf">file1.pdf</a></li>
-        <li><a href="/subdir/image.png">image.png</a></li>
-        <li><a href="/REPORT.md">Report</a></li>
-    </ul>
-    <img src="/subdir/image.png" alt="My Image" width="300">
-</body>
-</html>
+Now let talk about rate limiting.
 
+Basically you choose limit in the beginning and later stopes other requests:
+
+```python
+...
+RATE_LIMIT = 5
+...
+def check_rate_limit(ip):
+    now = time.monotonic()
+    with rate_lock:
+        q = rate_limits[ip]
+        while q and now - q[0] > 1:
+            q.popleft() # Remove requests older than 1 second
+        if len(q) >= RATE_LIMIT:
+            return False
+        q.append(now)
+        return True
 ```
+
+Nothing interesting. If I will run `python test_concurrent.py` it will show:
+
+```bash
+Testing concurrency...
+Thread 5: 429
+Thread 6: 429
+Thread 3: 429
+Thread 8: 429
+Thread 9: 429
+Thread 10: 429
+Thread 11: 429
+Thread 12: 429
+Thread 14: 429
+Thread 13: 429
+Thread 15: 429
+Thread 19: 429
+Thread 17: 429
+Thread 18: 429
+Thread 16: 429
+Thread 2: 200
+Thread 0: 200
+Thread 7: 200
+Thread 1: 200
+Thread 4: 200
+```
+
+Threads 2, 0, 7, 1, 4 were taken and delayed by one second, others were denyed.
+
+**Docker takes the same IP!...** therefore everethyng went good until I tested it with phone. When I tried simulteniously to run `python test_concurrent.py` and access index.html from my phone I got `rate limit excedeed` message.
+
+As I understood Docker on Windows will do it always, so to check rate limiting both on my phone and laptop I ran `server.py` and allowed in firewall `python.exe` for local hosts. It worked.
+
+```bash
+Connection from ('127.0.0.1', 29152)
+Connection from ('127.0.0.1', 29153)
+Connection from ('127.0.0.1', 29154)
+Connection from ('127.0.0.1', 29155)
+Connection from ('127.0.0.1', 29156)
+Connection from ('192.168.0.2', 52868)
+Connection from ('192.168.0.2', 52870)
+```
+
+![alt text](img/Screenshot_20251019_181159_Chrome.jpg)
+
+
 ---
 
 ## Links
 
 * Server running locally: [http://localhost:8080](http://localhost:8080)
-* Github repository: [https://github.com/vvtttvv/playing_with_docker_pr](https://github.com/vvtttvv/playing_with_docker_pr)
-* Docker Hub: [https://hub.docker.com/repository/docker/d1vinexd/lab1pr/general](https://hub.docker.com/repository/docker/d1vinexd/lab1pr/general)
-*I think docker hub can be helpful fr you, so I pushed my project there.*
+* Github repository: [https://github.com/vvtttvv/playing_with_docker_pr/tree/main/lab2](https://github.com/vvtttvv/playing_with_docker_pr/tree/main/lab2) 
 
 ---
 
 ## Conclusion
-This lab was my first hands-on experience with Docker, Python sockets, and basic HTTP communication.
-I managed to:
 
-Build and run a custom HTTP server that serves files of different types (HTML, PNG, PDF, MD).
-
-Create a Python client that can send GET requests and save responses locally.
-
-Containerize the server using Docker and successfully run it with Docker Compose.
-
-Test file serving and downloading both through the browser and the client.
-
-Overall, everything works as expected — the setup is simple, functional, and forms a solid foundation for future improvements (like better error handling, logs, or UI).
-It was a great introduction to deploying and interacting with services in Docker.
+Really nice lab, I liked it. The most difficult point was to has connection from phone when my `test_concurrency.py` spamed the email. I tried to do it with docker, doesn't work, with server on my machine it worked after I changed some settings in my firewal.

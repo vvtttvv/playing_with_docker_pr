@@ -85,6 +85,6 @@ export async function map(board: Board, playerId: string, f: (card: string) => P
  *          format described in the ps4 handout
  */
 export async function watch(board: Board, playerId: string): Promise<string> {
-    throw new Error('watch function not implemented');
-    // implement with glue code only, at most three lines
+    await board.watchForChange();
+    return board.look(playerId);
 }

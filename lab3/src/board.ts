@@ -7,22 +7,29 @@ import fs from 'node:fs';
 
 
 /**
- * Represents a space on the board - either empty or containing a card
+ * Represents a space on the board - either empty or containing a card.
+ * Mutable internal type used by Board ADT.
  */
 type Space = {
-    card: string | null; // null represents an empty space
-    faceUp: boolean; // true if the card is face up on the board
-    controlledBy: string | null; // null if unclaimed, otherwise the name of the player who controls it
+    /** The card string at this space, or null if the space is empty */
+    card: string | null;
+    /** True if the card is face up on the board, false if face down */
+    faceUp: boolean;
+    /** The player ID who controls this card, or null if unclaimed */
+    controlledBy: string | null;
 }
 
 /**
- * Represents a player's current state in the game
+ * Represents a player's current state in the game.
+ * Mutable internal type used by Board ADT to track each player's progress.
  */
-
 type PlayerState = {
-    firstCard: {row: number, col: number} | null; // null if no first card selected
-    secondCard: {row: number, col: number} | null; // null if no second card selected
-    matched: boolean; // true if their two cards matched
+    /** Position of the first card flipped by this player, or null if none */
+    firstCard: {row: number, col: number} | null;
+    /** Position of the second card flipped by this player, or null if none */
+    secondCard: {row: number, col: number} | null;
+    /** True if the player's two cards matched, false otherwise */
+    matched: boolean;
 }
 
 /**
@@ -44,13 +51,17 @@ export class Board {
     // that another player controls, they wait here
     private readonly waitQueue: Map<string, Array<() => void>>;  // position key -> waiting resolvers
 
+    // For implementing watch(): listeners waiting for board changes
+    private readonly changeListeners: Array<() => void> = [];
+
     // Abstraction function:
-    //   AF(rows, cols, grid, players, waitQueue) = a Memory Scramble game board
+    //   AF(rows, cols, grid, players, waitQueue, changeListeners) = a Memory Scramble game board
     //     with dimensions rows x cols, where grid[r][c] represents the space
     //     at row r, column c. Each space either has a card (face up or down)
     //     or is empty. players maps player IDs to their current game state
     //     (which cards they control and whether they matched). waitQueue
-    //     tracks players waiting to control specific cards.
+    //     tracks players waiting to control specific cards. changeListeners
+    //     contains callbacks to notify when the board state changes.
     // Representation invariant:
     //   - rows > 0, cols > 0
     //   - grid.length == rows
@@ -66,6 +77,7 @@ export class Board {
     //   - grid is private and never returned; methods return copies or derived data
     //   - players is private; methods don't expose the map or player state objects
     //   - waitQueue is private and never exposed
+    //   - changeListeners is private and never exposed
     //   - all constructor parameters are copied into new objects
 
     /**
@@ -371,6 +383,9 @@ export class Board {
         space.faceUp = true;
         space.controlledBy = playerId;
         playerState.firstCard = { row, col };
+        
+        // Notify watchers that a card turned face up
+        this.notifyChangeListeners();
     }
 
     /**
@@ -423,6 +438,9 @@ export class Board {
         
         // RULE 2-C: Turn face up if needed
         space.faceUp = true;
+        
+        // Notify watchers if card state changed
+        this.notifyChangeListeners();
         
         // RULE 2-D and 2-E: Check if cards match
         assert(firstSpace !== undefined, `firstSpace must be defined before checking match`);
@@ -487,6 +505,9 @@ export class Board {
         space.controlledBy = null;
         
         this.notifyWaiters(row, col);
+        
+        // Notify watchers that a card was removed
+        this.notifyChangeListeners();
     }
 
     /**
@@ -508,6 +529,9 @@ export class Board {
         if (space.card !== null && space.faceUp && space.controlledBy === null) {
             space.faceUp = false;
             this.notifyWaiters(row, col);
+            
+            // Notify watchers that a card turned face down
+            this.notifyChangeListeners();
         }
     }
 
@@ -590,9 +614,43 @@ export class Board {
                     space.card = newCard;
                 }
             }
+            
+            // Notify watchers after each card value transformation
+            // (cards changed from one string to a different string)
+            if (oldCard !== newCard) {
+                this.notifyChangeListeners();
+            }
         }
         
         this.checkRep();
+    }
+
+    /**
+     * Register a listener to be notified when the board changes.
+     * A change is defined as any cards turning face up or face down,
+     * being removed from the board, or changing card values.
+     * 
+     * @returns a promise that resolves the next time the board changes
+     */
+    public watchForChange(): Promise<void> {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        this.changeListeners.push(resolve);
+        return promise;
+    }
+
+    /**
+     * Notify all registered change listeners that the board has changed.
+     * This should be called whenever cards turn face up/down, are removed,
+     * or change their string values.
+     */
+    private notifyChangeListeners(): void {
+        // Notify all waiting listeners
+        const listeners = [...this.changeListeners];
+        this.changeListeners.length = 0; // Clear the array
+        
+        for (const listener of listeners) {
+            listener();
+        }
     }
 
     /**

@@ -982,6 +982,202 @@ describe('Board', function() {
         });
 
     });
+
+    describe('watch()', function() {
+
+        it('should wait for and notify on card flip (face up)', async function() {
+            const filename = 'test-boards/watch-flip.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Start watching for changes
+            let watchResolved = false;
+            const watchPromise = board.watchForChange().then(() => {
+                watchResolved = true;
+            });
+            
+            // Verify watch hasn't resolved yet
+            await timeout(10);
+            assert(!watchResolved, 'Watch should not resolve before change');
+            
+            // Make a change: flip a card
+            await board.flip('player1', 0, 0);
+            
+            // Watch should now resolve
+            await watchPromise;
+            assert(watchResolved, 'Watch should resolve after flip');
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should notify on card removal', async function() {
+            const filename = 'test-boards/watch-remove.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Set up a match
+            await board.flip('player1', 0, 0); // A
+            await board.flip('player1', 1, 0); // A - match!
+            
+            // Start watching
+            let watchResolved = false;
+            const watchPromise = board.watchForChange().then(() => {
+                watchResolved = true;
+            });
+            
+            await timeout(10);
+            assert(!watchResolved);
+            
+            // Remove the matched cards by making another move
+            await board.flip('player1', 0, 1);
+            
+            // Watch should resolve
+            await watchPromise;
+            assert(watchResolved);
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should notify on cards turning face down', async function() {
+            const filename = 'test-boards/watch-facedown.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Flip two non-matching cards
+            await board.flip('player1', 0, 0); // A
+            await board.flip('player1', 0, 1); // B - no match
+            
+            // Start watching
+            const watchPromise = board.watchForChange();
+            
+            // Make another move which will turn down the previous cards
+            await board.flip('player1', 1, 0);
+            
+            // Watch should resolve when cards turn face down
+            await watchPromise;
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should notify on map() card transformation', async function() {
+            const filename = 'test-boards/watch-map.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Start watching
+            const watchPromise = board.watchForChange();
+            
+            // Transform cards
+            await board.map(async (card) => `${card}!`);
+            
+            // Watch should resolve after transformation
+            await watchPromise;
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should handle multiple concurrent watchers', async function() {
+            const filename = 'test-boards/watch-multiple.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Start multiple watchers
+            let watcher1Resolved = false;
+            let watcher2Resolved = false;
+            let watcher3Resolved = false;
+            
+            const watch1 = board.watchForChange().then(() => { watcher1Resolved = true; });
+            const watch2 = board.watchForChange().then(() => { watcher2Resolved = true; });
+            const watch3 = board.watchForChange().then(() => { watcher3Resolved = true; });
+            
+            await timeout(10);
+            assert(!watcher1Resolved && !watcher2Resolved && !watcher3Resolved);
+            
+            // Make one change
+            await board.flip('player1', 0, 0);
+            
+            // All watchers should resolve
+            await Promise.all([watch1, watch2, watch3]);
+            assert(watcher1Resolved && watcher2Resolved && watcher3Resolved);
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should not notify on control changes without face changes', async function() {
+            const filename = 'test-boards/watch-control.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Flip a card face up
+            await board.flip('player1', 0, 0);
+            
+            // Start watching
+            let watchResolved = false;
+            const watchPromise = board.watchForChange().then(() => {
+                watchResolved = true;
+            });
+            
+            await timeout(10);
+            
+            // Player2 tries to flip the same card - will wait (no face change)
+            // This creates a waiting state but doesn't change card face/removal/value
+            const player2Promise = board.flip('player2', 0, 0);
+            
+            await timeout(10);
+            // Watch should NOT have resolved yet (no face/removal/value change)
+            assert(!watchResolved, 'Watch should not resolve on control change alone');
+            
+            // Clean up: let player2's flip complete
+            await board.flip('player1', 0, 1); // Player1 makes second flip
+            await player2Promise; // Player2 gets the card
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should allow look() to interleave with watch()', async function() {
+            const filename = 'test-boards/watch-look.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Start watching
+            const watchPromise = board.watchForChange();
+            
+            // While waiting, look() should work normally
+            const view1 = board.look('observer');
+            assert(view1.startsWith('2x2'));
+            
+            // Make change
+            await board.flip('player1', 0, 0);
+            
+            // Wait should resolve
+            await watchPromise;
+            
+            // look() should still work after watch resolves
+            const view2 = board.look('player1');
+            assert(view2.includes('my A'), 'Player1 should see their controlled card');
+            
+            // Observer should see it as 'up A'
+            const observerView = board.look('observer');
+            assert(observerView.includes('up A'), 'Observer should see card as up');
+            
+            await fs.promises.unlink(filename);
+        });
+
+    });
     
     // Cleanup test-boards directory after all tests
     after(async function() {

@@ -328,7 +328,6 @@ export class Board {
             firstSpace = rowData[first.col];
             assert(firstSpace !== undefined, `grid[${first.row}][${first.col}] must be defined`);
         }
-        console.log(`DEBUG: Before checking second card, firstSpace.controlledBy = ${firstSpace?.controlledBy}`);
         // RULE 2-A: No card there
         if (space.card === null) {
             assert(firstSpace !== undefined, `firstSpace must be defined before relinquishing control`);
@@ -349,19 +348,15 @@ export class Board {
             playerState.firstCard = null;
             throw new Error(`card at (${row},${col}) is controlled by another player`);
         }
-        console.log(`DEBUG: Before turning up second card, firstSpace.controlledBy = ${firstSpace?.controlledBy}`);
         // RULE 2-C: Turn face up if needed
         space.faceUp = true;
-        console.log(`DEBUG: After turning up second card, firstSpace.controlledBy = ${firstSpace?.controlledBy}`);
         // RULE 2-D and 2-E: Check if cards match
         assert(firstSpace !== undefined, `firstSpace must be defined before checking match`);
-        console.log(`DEBUG: firstSpace.card = '${firstSpace.card}', space.card = '${space.card}'`);
         if (firstSpace.card === space.card) {
             // Match! Keep control of both
             space.controlledBy = playerId;
             playerState.secondCard = { row, col };
             playerState.matched = true;
-            console.log(`DEBUG: Match! Set second card control. firstSpace.controlledBy = ${firstSpace.controlledBy}`);
         }
         else {
             // RULE 2-E: No match - relinquish control of both cards but leave face up
@@ -369,10 +364,10 @@ export class Board {
             if (first !== null)
                 this.notifyWaiters(first.row, first.col);
             // Don't take control of second card, just leave it face up
+            // Keep firstCard and secondCard set so finishPreviousPlay can turn them down
             playerState.secondCard = { row, col };
-            playerState.firstCard = null;
             playerState.matched = false;
-            console.log(`DEBUG: No match! Relinquished control.`);
+            // NOTE: Don't set firstCard = null here! We need it for finishPreviousPlay (RULE 3-B)
         }
     }
     /**

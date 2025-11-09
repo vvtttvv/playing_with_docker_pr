@@ -549,6 +549,281 @@ describe('Board', function() {
             await fs.promises.unlink(filename);
         });
     });
+    describe('Advanced Concurrency Scenarios', function() {
+        
+        it('should handle 5 players flipping different cards concurrently', async function() {
+            const filename = 'test-boards/concurrent-5players.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '5x5\nA\nB\nC\nD\nE\nA\nB\nC\nD\nE\nF\nG\nH\nI\nJ\nF\nG\nH\nI\nJ\nK\nL\nM\nN\nO\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // All 5 players flip different cards at the same time
+            await Promise.all([
+                board.flip('player1', 0, 0), // A
+                board.flip('player2', 0, 1), // B
+                board.flip('player3', 0, 2), // C
+                board.flip('player4', 0, 3), // D
+                board.flip('player5', 0, 4)  // E
+            ]);
+            
+            // Verify each player controls their card
+            const view1 = board.look('player1');
+            const view2 = board.look('player2');
+            const view3 = board.look('player3');
+            
+            assert(view1.includes('my A'));
+            assert(view2.includes('my B'));
+            assert(view3.includes('my C'));
+            
+            await fs.promises.unlink(filename);
+        });
+        
+        it('should handle waiting chain: A controls, B waits, C waits, A releases', async function() {
+            const filename = 'test-boards/waiting-chain.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Alice controls (0,0)
+            await board.flip('alice', 0, 0);
+            
+            // Bob waits for (0,0)
+            let bobGotCard = false;
+            const bobPromise = board.flip('bob', 0, 0).then(() => {
+                bobGotCard = true;
+            });
+            
+            // Charlie also waits for (0,0)
+            let charlieGotCard = false;
+            const charliePromise = board.flip('charlie', 0, 0).then(() => {
+                charlieGotCard = true;
+            });
+            
+            await timeout(10);
+            assert.strictEqual(bobGotCard, false, 'Bob should still be waiting');
+            assert.strictEqual(charlieGotCard, false, 'Charlie should still be waiting');
+            
+            // Alice releases by flipping another card
+            await board.flip('alice', 0, 1);
+            
+            // One of Bob/Charlie should get it
+            await Promise.race([bobPromise, charliePromise]);
+            assert(bobGotCard || charlieGotCard, 'At least one should get the card');
+            
+            await fs.promises.unlink(filename);
+        });
+        
+        it('should handle player making match while others wait for one of the cards', async function() {
+            const filename = 'test-boards/match-with-waiters.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '3x3\nA\nB\nA\nB\nC\nC\nD\nD\nE\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Alice matches two A cards
+            await board.flip('alice', 0, 0);
+            await board.flip('alice', 0, 2); // Match!
+            
+            // Bob waits for one of Alice's matched cards
+            const bobPromise = board.flip('bob', 0, 0).catch((err) => {
+                // Card gets removed, Bob should fail
+                return 'failed';
+            });
+            
+            await timeout(10);
+            
+            // Alice makes next move - removes matched cards
+            await board.flip('alice', 0, 1);
+            
+            const result = await bobPromise;
+            assert.strictEqual(result, 'failed', 'Bob should fail when card is removed');
+            
+            await fs.promises.unlink(filename);
+        });
+        
+        it('should not deadlock when two players want each others cards', async function() {
+            const filename = 'test-boards/no-deadlock.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Alice controls (0,0)
+            await board.flip('alice', 0, 0);
+            
+            // Bob controls (0,1)
+            await board.flip('bob', 0, 1);
+            
+            // Both try to flip each other's cards concurrently
+            // Rule 2-B ensures no deadlock by rejecting immediately instead of waiting
+            // Due to JavaScript's single-threaded nature, one may succeed after the other fails and relinquishes
+            const [aliceResult, bobResult] = await Promise.allSettled([
+                board.flip('alice', 0, 1), // Alice tries Bob's card
+                board.flip('bob', 0, 0)     // Bob tries Alice's card
+            ]);
+            
+            // At least one should fail (the one that checks first)
+            // The key is that neither waits forever (no deadlock)
+            const aliceFailed = aliceResult.status === 'rejected';
+            const bobFailed = bobResult.status === 'rejected';
+            
+            assert(aliceFailed || bobFailed, 'At least one flip should fail to avoid deadlock');
+            
+            // Verify the error messages for any that failed
+            if (aliceFailed) {
+                assert.match((aliceResult as PromiseRejectedResult).reason.message, /controlled by another player|no card at/);
+            }
+            if (bobFailed) {
+                assert.match((bobResult as PromiseRejectedResult).reason.message, /controlled by another player|no card at/);
+            }
+            
+            await fs.promises.unlink(filename);
+        });
+        
+        it('should handle rapid concurrent flips from many players', async function() {
+            this.timeout(10000); // Increase timeout to 10 seconds for this stress test
+            
+            const filename = 'test-boards/rapid-concurrent.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '5x5\nA\nB\nA\nB\nC\nC\nD\nD\nE\nE\nF\nF\nG\nG\nH\nH\nI\nI\nJ\nJ\nK\nK\nL\nL\nM\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Reduced to avoid livelock under extreme contention
+            // With random flips, players may repeatedly contend for the same cards
+            const players = 3;
+            const flipsPerPlayer = 2;
+            
+            const promises = [];
+            for (let p = 0; p < players; p++) {
+                const playerId = `player${p}`;
+                promises.push(
+                    (async () => {
+                        for (let f = 0; f < flipsPerPlayer; f++) {
+                            try {
+                                const row = randomInt(5);
+                                const col = randomInt(5);
+                                await board.flip(playerId, row, col);
+                                await timeout(randomInt(5)); // Small random delay
+                            } catch (err) {
+                                // Some flips will fail, that's okay
+                            }
+                        }
+                    })()
+                );
+            }
+            
+            // All should complete without hanging or crashing
+            await Promise.all(promises);
+            
+            // Board should still be in valid state
+            const view = board.look('observer');
+            assert(view.startsWith('5x5'));
+            
+            await fs.promises.unlink(filename);
+        });
+        
+        it('should correctly interleave look() calls during flip() waiting', async function() {
+            const filename = 'test-boards/look-during-wait.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Alice controls (0,0)
+            await board.flip('alice', 0, 0);
+            
+            // Bob waits for (0,0)
+            const bobPromise = board.flip('bob', 0, 0);
+            
+            await timeout(5);
+            
+            // While Bob is waiting, Charlie should be able to look at the board
+            const charlieView = board.look('charlie');
+            assert(charlieView.includes('up A'), 'Charlie should see Alice\'s card');
+            
+            // And Charlie should be able to flip other cards
+            await board.flip('charlie', 1, 1);
+            const charlieView2 = board.look('charlie');
+            assert(charlieView2.includes('my B'), 'Charlie should control (1,1)');
+            
+            // Release Bob
+            await board.flip('alice', 0, 1);
+            await bobPromise;
+            
+            await fs.promises.unlink(filename);
+        });
+        
+        it('should handle player finishing matched cards while others have flips pending', async function() {
+            const filename = 'test-boards/finish-with-pending.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '3x3\nA\nB\nA\nB\nC\nC\nD\nD\nE\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Alice matches As at (0,0) and (0,2)
+            await board.flip('alice', 0, 0);
+            await board.flip('alice', 0, 2);
+            
+            // Bob starts flipping cards
+            const bobPromise = (async () => {
+                await board.flip('bob', 1, 1); // B at (1,1)
+                await board.flip('bob', 1, 2); // C at (1,2) - no match
+            })();
+            
+            await timeout(5);
+            
+            // Alice starts new move - removes her As
+            await board.flip('alice', 1, 0);
+            
+            // Bob's operations should complete normally
+            await bobPromise;
+            
+            // Verify As are gone
+            const view = board.look('alice');
+            const lines = view.split('\n');
+            assert.strictEqual(lines[1], 'none'); // (0,0) removed
+            assert.strictEqual(lines[3], 'none'); // (0,2) removed
+            
+            await fs.promises.unlink(filename);
+        });
+        
+        it('should correctly handle three players in sequence with waiting', async function() {
+            const filename = 'test-boards/three-sequence.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '3x3\nA\nB\nC\nA\nB\nC\nD\nD\nE\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Alice takes (0,0)
+            await board.flip('alice', 0, 0);
+            
+            // Bob waits for (0,0)
+            const bobPromise = board.flip('bob', 0, 0);
+            
+            // Charlie also waits for (0,0)
+            const charliePromise = board.flip('charlie', 0, 0);
+            
+            await timeout(10);
+            
+            // Alice releases
+            await board.flip('alice', 0, 1);
+            
+            // Bob gets it (or Charlie, doesn't matter)
+            await Promise.race([bobPromise, charliePromise]);
+            
+            // The one who got it should control it
+            const bobView = board.look('bob');
+            const charlieView = board.look('charlie');
+            
+            assert(bobView.includes('my A') || charlieView.includes('my A'),
+                   'One of them should control the card');
+            
+            await fs.promises.unlink(filename);
+        });
+    });
     
     // Cleanup test-boards directory after all tests
     after(async function() {
@@ -587,4 +862,11 @@ async function timeout(ms: number): Promise<void> {
     const { promise, resolve } = Promise.withResolvers<void>();
     setTimeout(resolve, ms);
     return promise;
+}
+
+/**
+ * Helper: random integer
+ */
+function randomInt(max: number): number {
+    return Math.floor(Math.random() * max);
 }

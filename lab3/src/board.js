@@ -444,6 +444,64 @@ export class Board {
         }
     }
     /**
+     * Apply a transformer function to every card on the board.
+     * Replaces each card with f(card), maintaining pairwise consistency:
+     * if two cards match before transformation, they will not be observed
+     * as non-matching during transformation.
+     *
+     * This operation allows interleaving with other board operations.
+     * Other operations may see partially-transformed boards, but matching
+     * pairs will remain consistent.
+     *
+     * @param f transformer function that maps card strings to new card strings;
+     *          must be a mathematical function (same input always gives same output)
+     * @returns promise that resolves when all cards have been transformed
+     */
+    async map(f) {
+        // To maintain pairwise consistency, we need to:
+        // 1. Group cards by their current value
+        // 2. Transform each unique card value once
+        // 3. Apply the transformation to all instances of that card
+        // Build a map of card value -> list of positions with that card
+        const cardPositions = new Map();
+        for (let r = 0; r < this.rows; r++) {
+            for (let c = 0; c < this.cols; c++) {
+                const row = this.grid[r];
+                assert(row !== undefined, `grid[${r}] must be defined`);
+                const space = row[c];
+                assert(space !== undefined, `grid[${r}][${c}] must be defined`);
+                if (space.card !== null) {
+                    const positions = cardPositions.get(space.card);
+                    if (positions === undefined) {
+                        cardPositions.set(space.card, [{ row: r, col: c }]);
+                    }
+                    else {
+                        positions.push({ row: r, col: c });
+                    }
+                }
+            }
+        }
+        // Transform each unique card value and apply to all its positions atomically
+        for (const [oldCard, positions] of cardPositions) {
+            // Call transformer function once per unique card
+            const newCard = await f(oldCard);
+            // Atomically update all positions with this card
+            // This ensures pairwise consistency: all instances change together
+            for (const { row, col } of positions) {
+                const rowData = this.grid[row];
+                assert(rowData !== undefined, `grid[${row}] must be defined`);
+                const space = rowData[col];
+                assert(space !== undefined, `grid[${row}][${col}] must be defined`);
+                // Only update if the card is still the old value
+                // (it might have been removed by a match during transformation)
+                if (space.card === oldCard) {
+                    space.card = newCard;
+                }
+            }
+        }
+        this.checkRep();
+    }
+    /**
      * String representation of the board.
      * Shows all cards face up for debugging.
      *

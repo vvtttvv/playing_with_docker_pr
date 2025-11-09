@@ -824,6 +824,164 @@ describe('Board', function() {
             await fs.promises.unlink(filename);
         });
     });
+
+    describe('map()', function() {
+
+        it('should transform all cards on the board', async function() {
+            const filename = 'test-boards/map-simple.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Transform A->X, B->Y
+            await board.map(async (card) => {
+                if (card === 'A') return 'X';
+                if (card === 'B') return 'Y';
+                return card;
+            });
+            
+            // Flip cards to verify transformation
+            await board.flip('player1', 0, 0);
+            const view = board.look('player1');
+            assert(view.includes('my X')); // Was A, now X
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should maintain pairwise consistency during transformation', async function() {
+            const filename = 'test-boards/map-consistency.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Flip cards face up
+            await board.flip('player1', 0, 0); // A at (0,0)
+            await board.flip('player1', 0, 1); // B at (0,1) - no match
+            
+            // Both As should transform together
+            await board.map(async (card) => {
+                await timeout(5);
+                return `${card}-new`;
+            });
+            
+            const view = board.look('player1');
+            assert(view.includes('A-new'));
+            assert(view.includes('B-new'));
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should not affect card face-up/down state', async function() {
+            const filename = 'test-boards/map-facestate.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Flip one card face up
+            await board.flip('player1', 0, 0);
+            
+            // Transform cards
+            await board.map(async (card) => `${card}+`);
+            
+            const afterView = board.look('player1');
+            const afterLines = afterView.split('\n');
+            
+            // First card should still be controlled
+            assert(afterLines[1] === 'my A+');
+            
+            // Other cards should still be face down
+            assert(afterLines[2] === 'down');
+            assert(afterLines[3] === 'down');
+            assert(afterLines[4] === 'down');
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should not affect player control state', async function() {
+            const filename = 'test-boards/map-control.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Alice controls (0,0), Bob controls (0,1)
+            await board.flip('alice', 0, 0);
+            await board.flip('bob', 0, 1);
+            
+            // Transform cards
+            await board.map(async (card) => `${card}*`);
+            
+            // Both should still control their cards
+            const aliceView = board.look('alice');
+            assert(aliceView.includes('my A*'));
+            
+            const bobView = board.look('bob');
+            assert(bobView.includes('my B*'));
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should allow flip operations to interleave during map', async function() {
+            const filename = 'test-boards/map-interleave.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '2x2\nA\nB\nA\nB\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Start a slow map
+            const mapPromise = board.map(async (card) => {
+                await timeout(20);
+                return `${card}#`;
+            });
+            
+            // While map is running, flip a card
+            await timeout(5);
+            await board.flip('player1', 0, 0);
+            
+            // Player should control a card
+            const view = board.look('player1');
+            assert(view.includes('my A') || view.includes('my A#'));
+            
+            await mapPromise;
+            
+            // After map, player should control the transformed card
+            const finalView = board.look('player1');
+            assert(finalView.includes('my A#'));
+            
+            await fs.promises.unlink(filename);
+        });
+
+        it('should handle empty spaces correctly', async function() {
+            const filename = 'test-boards/map-empty.txt';
+            await fs.promises.mkdir('test-boards', { recursive: true });
+            await fs.promises.writeFile(filename, '3x3\nA\nB\nA\nB\nC\nC\nD\nD\nE\n');
+            
+            const board = await Board.parseFromFile(filename);
+            
+            // Make a match and remove cards: match the two As
+            await board.flip('player1', 0, 0); // A at (0,0)
+            await board.flip('player1', 0, 2); // A at (0,2) - match!
+            await board.flip('player1', 0, 1); // Start new play, removes the matched As
+            
+            // Now (0,0) and (0,2) should be empty
+            const beforeMap = board.look('player1');
+            assert(beforeMap.includes('none'), 'Should have empty spaces before map');
+            
+            // Transform remaining cards
+            await board.map(async (card) => `${card}!`);
+            
+            const afterMap = board.look('player1');
+            
+            // Empty spaces should still be empty after map
+            assert(afterMap.includes('none'), 'Empty spaces should remain empty after map');
+            
+            await fs.promises.unlink(filename);
+        });
+
+    });
     
     // Cleanup test-boards directory after all tests
     after(async function() {

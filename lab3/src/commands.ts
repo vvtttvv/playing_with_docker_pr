@@ -70,8 +70,8 @@ export async function flip(board: Board, playerId: string, row: number, column: 
  *          in the format described in the ps4 handout
  */
 export async function map(board: Board, playerId: string, f: (card: string) => Promise<string>): Promise<string> {
-    throw new Error('map function not implemented');
-    // implement with glue code only, at most three lines
+    await board.map(f);
+    return board.look(playerId);
 }
 
 /**

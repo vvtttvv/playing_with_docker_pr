@@ -25,7 +25,7 @@ async function fuzzTestMain(): Promise<void> {
 
   // Fuzz test configuration
   const players = 4; // 4 concurrent players
-  const movesPerPlayer = 100; // 100 moves each = 400 total
+  const movesPerPlayer = 1000; // 100 moves each = 400 total
   const minDelayMs = 0.1; // Minimum delay between moves
   const maxDelayMs = 2; // Maximum delay between moves
 

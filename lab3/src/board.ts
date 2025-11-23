@@ -234,6 +234,7 @@ export class Board {
   public getDimensions(): { rows: number; cols: number } {
     return { rows: this.rows, cols: this.cols };
   }
+  
   /**
    * Look at the board from a player's perspective.
    *

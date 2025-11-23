@@ -3,9 +3,11 @@ import asyncio
 import random
 from aiohttp import web, ClientSession, ClientTimeout
 
-# In-memory key-value store
-store = {}
+# In-memory key-value store with version numbers
+store = {}  # key -> (value, version)
 store_lock = asyncio.Lock()
+version_counter = 0
+version_lock = asyncio.Lock()
 
 # Role configuration
 ROLE = os.environ.get("ROLE", "follower")
@@ -18,19 +20,27 @@ FOLLOWERS = [f.strip() for f in FOLLOWERS.split(",") if f.strip()]
 MIN_DELAY_MS = float(os.environ.get("MIN_DELAY", "0.1"))
 MAX_DELAY_MS = float(os.environ.get("MAX_DELAY", "1.0"))
 
-# Write quorum
 WRITE_QUORUM = int(os.environ.get("WRITE_QUORUM", "1"))
 
 # Replication timeout per follower (seconds)
 REPL_TIMEOUT = float(os.environ.get("REPL_TIMEOUT", "2.0"))
 
-async def write_local(key, value):
+async def get_next_version():
+    global version_counter
+    async with version_lock:
+        version_counter += 1
+        return version_counter
+
+async def write_local(key, value, version):
     async with store_lock:
-        store[key] = value
+        current = store.get(key, (None, 0))
+        if version >= current[1]:
+            store[key] = (value, version)
 
 async def read_local(key):
     async with store_lock:
-        return store.get(key)
+        entry = store.get(key)
+        return entry[0] if entry else None
 
 async def get_key(request):
     key = request.match_info['key']
@@ -45,29 +55,29 @@ async def replicate(request):
     except:
         return web.json_response({"error": "bad request"}, status=400)
     
-    if "key" not in body or "value" not in body:
+    if "key" not in body or "value" not in body or "version" not in body:
         return web.json_response({"error": "bad request"}, status=400)
     
     key = body["key"]
     value = body["value"]
-    await write_local(key, value)
+    version = body["version"]
+    await write_local(key, value, version)
     return web.json_response({"status": "ok"}, status=200)
 
-async def replicate_to_follower(session, follower_addr, key, value):
+async def replicate_to_follower(session, follower_addr, key, value, version):
     try:
-        # Simulate variable network delay
         delay_ms = random.uniform(MIN_DELAY_MS, MAX_DELAY_MS)
         await asyncio.sleep(delay_ms / 1000.0)
         
-        payload = {"key": key, "value": value}
+        payload = {"key": key, "value": value, "version": version}
         url = f"http://{follower_addr}/replicate"
         
         timeout = ClientTimeout(total=REPL_TIMEOUT)
         async with session.post(url, json=payload, timeout=timeout) as resp:
             if resp.status == 200:
                 return True
-    except Exception as e:
-        print(f"Replication to {follower_addr} failed: {e}")
+    except Exception:
+        pass
     return False
 
 async def put_key(request):
@@ -85,11 +95,10 @@ async def put_key(request):
         return web.json_response({"error": "bad request"}, status=400)
     
     value = body["value"]
+    version = await get_next_version()
     
-    # 1) Write locally synchronously
-    await write_local(key, value)
+    await write_local(key, value, version)
     
-    # 2) Replicate to followers
     required = WRITE_QUORUM
     
     if len(FOLLOWERS) == 0:
@@ -98,19 +107,16 @@ async def put_key(request):
         else:
             return web.json_response({"status": "error", "reason": "no followers"}, status=500)
     
-    # Create tasks for all followers
     timeout = ClientTimeout(total=REPL_TIMEOUT)
     async with ClientSession(timeout=timeout) as session:
-        tasks = [replicate_to_follower(session, f, key, value) for f in FOLLOWERS]
+        tasks = [replicate_to_follower(session, f, key, value, version) for f in FOLLOWERS]
         
         confirmations = 0
-        # Wait for tasks and count confirmations
         for coro in asyncio.as_completed(tasks):
             try:
                 success = await coro
                 if success:
                     confirmations += 1
-                    # Early return if quorum reached
                     if confirmations >= required:
                         return web.json_response({
                             "status": "ok",
@@ -119,7 +125,6 @@ async def put_key(request):
             except Exception:
                 pass
         
-        # Check final quorum
         if confirmations >= required:
             return web.json_response({
                 "status": "ok",
@@ -153,7 +158,7 @@ async def admin_get_quorum(request):
 
 async def admin_store_dump(request):
     async with store_lock:
-        return web.json_response({"store": dict(store)}, status=200)
+        return web.json_response({"store": {k: v[0] for k, v in store.items()}}, status=200)
 
 def create_app():
     app = web.Application()
